@@ -1,25 +1,18 @@
-"""
-SUKATA - Backend Principal
-Sistema de Registro de Defectos de Equipos
-"""
-
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
+import shutil
+from datetime import datetime
 from dotenv import load_dotenv
+from typing import Optional
 
-# Cargar variables de entorno
+from app.services.product_service import ProductService
+
 load_dotenv()
 
-# Crear la aplicación FastAPI
-app = FastAPI(
-    title="Sukata API",
-    description="API para el sistema de registro de defectos de equipos",
-    version="1.0.0"
-)
+app = FastAPI(title="Sukata API", version="1.0.0")
 
-# Configurar CORS (permite que Flutter hable con el backend)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,35 +21,81 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Crear carpeta uploads si no existe
 os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Montar carpeta para archivos estáticos (imágenes)
-try:
-    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-except Exception as e:
-    print(f"Error montando uploads: {e}")
-
-# ============================================
-# ENDPOINTS BÁSICOS
-# ============================================
+product_service = ProductService()
 
 @app.get("/")
 def root():
-    """Endpoint principal - verifica que el API funciona"""
-    return {
-        "message": "🚀 Sukata API funcionando correctamente",
-        "version": "1.0.0",
-        "status": "online"
-    }
+    return {"message": "Sukata API funcionando", "status": "online"}
 
 @app.get("/health")
-def health_check():
-    """Endpoint para verificar que el servidor está vivo"""
-    return {
-        "status": "healthy",
-        "database": "pending"
-    }
+def health():
+    return {"status": "healthy"}
+
+@app.get("/api/products")
+def get_products():
+    """Obtener todos los productos"""
+    return product_service.get_all()
+
+@app.get("/api/products/{product_id}")
+def get_product(product_id: int):
+    """Obtener un producto por ID"""
+    product = product_service.get_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    return product
+
+@app.post("/api/products")
+async def create_product(
+    name: str = Form(...),
+    category: str = Form("otro"),
+    defect: str = Form(...),
+    status: str = Form("pendiente"),
+    notes: Optional[str] = Form(None),
+    image: Optional[UploadFile] = File(None)
+):
+    """Crear un nuevo producto"""
+    image_url = None
+    if image:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_{image.filename}"
+        filepath = f"uploads/{filename}"
+        
+        with open(filepath, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+        
+        image_url = f"/uploads/{filename}"
+    
+    product_id = product_service.create(name, category, defect, status, notes, image_url)
+    
+    return {"message": "Producto creado", "id": product_id}
+
+@app.put("/api/products/{product_id}")
+def update_product(product_id: int, status: str):
+    """Actualizar estado de un producto"""
+    product = product_service.get_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    product_service.update_status(product_id, status)
+    return {"message": "Producto actualizado"}
+
+@app.delete("/api/products/{product_id}")
+def delete_product(product_id: int):
+    """Eliminar un producto"""
+    product = product_service.get_by_id(product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    
+    product_service.delete(product_id)
+    return {"message": "Producto eliminado"}
+
+@app.get("/api/statistics")
+def get_statistics():
+    """Obtener estadísticas para dashboard"""
+    return product_service.get_statistics()
 
 if __name__ == "__main__":
     import uvicorn
